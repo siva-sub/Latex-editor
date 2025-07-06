@@ -186,6 +186,7 @@ class ProjectListScreen extends ConsumerWidget {
               itemBuilder: (context, index) {
                 final project = projects[index];
                 return Card(
+                  elevation: 1.0, // Reduce elevation for a flatter look with Yaru
                   margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
                   child: ListTile(
                     leading: const Icon(Icons.article_outlined), // Consider a more specific LaTeX icon

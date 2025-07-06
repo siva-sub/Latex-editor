@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-// Placeholder for Project List Screen (will be created in the next step)
 import 'package:latex_editor/screens/project_list_screen.dart';
+import 'package:yaru/yaru.dart'; // Import Yaru package
 
 void main() {
   runApp(
@@ -19,17 +18,9 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'LaTeX Editor',
-      theme: ThemeData(
-        colorSchemeSeed: Colors.blue, // Recommended for Material 3
-        useMaterial3: true,
-        brightness: Brightness.light,
-      ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: Colors.blue, // Recommended for Material 3
-        useMaterial3: true,
-        brightness: Brightness.dark,
-      ),
-      themeMode: ThemeMode.system, // Or allow user to choose
+      theme: yaruLightTheme, // Apply Yaru light theme
+      darkTheme: yaruDarkTheme, // Apply Yaru dark theme
+      themeMode: ThemeMode.system,
       home: const ProjectListScreen(),
       debugShowCheckedModeBanner: false,
     );

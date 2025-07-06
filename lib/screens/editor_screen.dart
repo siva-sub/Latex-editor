@@ -5,7 +5,9 @@ import 'package:latex_editor/models/project_model.dart';
 import 'package:latex_editor/providers/project_provider.dart';
 import 'package:process_run/process_run.dart';
 import 'package:latex_editor/screens/pdf_view_screen.dart';
-import 'package:latex_editor/utils/tectonic_installer.dart'; // Added TectonicInstaller
+import 'package:latex_editor/utils/tectonic_installer.dart';
+import 'package:latex_editor/utils/pandoc_installer.dart'; // Already added in previous step by logic, ensuring it's here.
+import 'package:share_plus/share_plus.dart'; // For sharing exported files
 
 class EditorScreen extends ConsumerStatefulWidget {
   final String projectId;
@@ -290,6 +292,11 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
             onPressed: _isCompiling ? null : _saveContent,
             tooltip: 'Save Document',
           ),
+          IconButton(
+            icon: const Icon(Icons.share_outlined), // Or Icons.output / Icons.upload_file
+            onPressed: _isCompiling ? null : _showExportOptionsDialog,
+            tooltip: 'Export Project As...',
+          ),
         ],
       ),
       body: Padding(
@@ -337,5 +344,150 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         ),
       ),
     );
+  }
+
+  void _showExportOptionsDialog() {
+    if (_currentProjectDetails == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Project not loaded.')),
+      );
+      return;
+    }
+
+    // Define available export formats
+    // Key: User-facing label, Value: format argument for Pandoc (and file extension)
+    Map<String, String> exportFormats = {
+      'Word Document (.docx)': 'docx',
+      'HTML Document (.html)': 'html',
+      'Markdown (.md)': 'md',
+      // TODO: Add more formats as needed, e.g., ODT, EPUB
+    };
+
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Export Project As...'),
+          content: SingleChildScrollView(
+            child: ListBody(
+              children: exportFormats.entries.map((entry) {
+                return ListTile(
+                  title: Text(entry.key),
+                  onTap: () {
+                    Navigator.of(dialogContext).pop(); // Close the dialog
+                    _exportWithPandoc(entry.value, entry.key.substring(entry.key.lastIndexOf('(') + 1, entry.key.lastIndexOf(')'))); // Pass format and extension
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _exportWithPandoc(String format, String fileExtension) async {
+    if (_currentProjectDetails == null) return;
+    if (_isCompiling) { // Also check if already exporting with Pandoc if we add such a flag
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Another process is running.')));
+      return;
+    }
+
+    await _saveContent(); // Ensure latest content is saved
+
+    // TODO: Add a state flag like _isExportingWithPandoc if needed for UI feedback
+    setState(() {
+      // _isExportingWithPandoc = true; // If we add more specific UI feedback for this
+      _compilationLogs = 'Starting Pandoc export to $format...\n'; // Reuse compilationLogs for now
+    });
+    _showCompilationLogs(); // Show logs modal
+
+    final project = _currentProjectDetails!;
+    final pandocCmd = await PandocInstaller.getPandocExecutablePath() ?? 'pandoc';
+
+    // Define output directory and file name
+    // For simplicity, save in a subdirectory within the project folder
+    final exportsDir = Directory('${project.projectDirPath}/exports');
+    if (!await exportsDir.exists()) {
+      await exportsDir.create(recursive: true);
+    }
+    // Sanitize project name for use in a filename
+    final sanitizedProjectName = project.name.replaceAll(RegExp(r'[^\w\s-]'), '_').replaceAll(' ', '_');
+    final outputFileName = '$sanitizedProjectName.$fileExtension';
+    final outputFilePath = '${exportsDir.path}/$outputFileName';
+
+    final shell = Shell(workingDirectory: project.projectDirPath, verbose: true);
+    _compilationLogs += 'Using Pandoc command: $pandocCmd\n';
+    _compilationLogs += 'Input file: ${project.mainTexPath}\n';
+    _compilationLogs += 'Output file: $outputFilePath\n';
+    _compilationLogs += 'Format: $format\n';
+     setState(() {}); // Update logs displayed in modal
+
+    try {
+      // Pandoc command: pandoc input.tex -o output.ext
+      final result = await shell.run('$pandocCmd ${project.mainTexPath} -o $outputFilePath');
+
+      if (mounted) {
+        setState(() {
+          _compilationLogs += 'Pandoc process finished.\n';
+          _compilationLogs += 'Stdout:\n${result.outText}\n';
+          _compilationLogs += 'Stderr:\n${result.errText}\n';
+          if (result.exitCode == 0) {
+            _compilationLogs += 'Export successful to $outputFilePath!\n';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Exported to $outputFileName!'),
+                action: SnackBarAction(
+                  label: 'Share',
+                  onPressed: () async {
+                    final xfile = XFile(outputFilePath);
+                    await Share.shareXFiles([xfile], text: 'Exported ${project.name} as $outputFileName');
+                  },
+                ),
+              ),
+            );
+          } else {
+            _compilationLogs += 'Pandoc export failed. Exit code: ${result.exitCode}\n';
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Pandoc export failed. Exit code: ${result.exitCode}')),
+            );
+          }
+        });
+      }
+    } on ProcessException catch (e) {
+      if (mounted) {
+        setState(() {
+          _compilationLogs += 'Error running Pandoc: $e\n';
+          _compilationLogs += 'Make sure Pandoc is installed and in your PATH.\n';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error: Pandoc command not found or failed to run.')),
+        );
+      }
+      print('Pandoc execution error: $e');
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _compilationLogs += 'An unexpected error occurred during Pandoc export: $e\n';
+        });
+      }
+      print('Unexpected Pandoc export error: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          // _isExportingWithPandoc = false; // Reset flag
+        });
+         // Re-render the logs modal if it's still open or call _showCompilationLogs again
+         // For simplicity, the modal will auto-update as _compilationLogs changes if it's open.
+      }
+    }
   }
 }
