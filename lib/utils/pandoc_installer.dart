@@ -16,23 +16,39 @@ const String currentBundledPandocVersion = "3.7.0.2-bundle1"; // Example version
 
 class PandocInstaller {
   static Future<String?> getPandocExecutablePath() async {
-    // Check if running inside an AppImage first
+    // --- Windows: Check for bundled tool relative to main executable ---
+    if (Platform.isWindows) {
+      try {
+        final mainAppExePath = Platform.resolvedExecutable;
+        final mainAppDir = File(mainAppExePath).parent;
+        final toolPath = '${mainAppDir.path}\\tools\\$pandocWindowsExe';
+
+        if (await File(toolPath).exists()) {
+          print("PandocInstaller (Windows): Found bundled at $toolPath. Using direct path.");
+          return toolPath;
+        } else {
+          print("PandocInstaller (Windows): Bundled tool not found at $toolPath. Will proceed to other methods.");
+        }
+      } catch (e) {
+        print("PandocInstaller (Windows): Error checking for bundled tool: $e. Will proceed to other methods.");
+      }
+    }
+
+    // --- Linux AppImage: Check for bundled tool ---
     if (Platform.isLinux && Platform.environment.containsKey('APPIMAGE') && Platform.environment.containsKey('APPDIR')) {
       final appDir = Platform.environment['APPDIR'];
-      // Determine correct binary name for the platform (e.g. pandoc vs pandoc.exe)
-      final binaryName = Platform.isWindows ? pandocWindowsExe : pandocToolName;
-      final executablePath = '$appDir/usr/bin/$binaryName';
+      final executablePath = '$appDir/usr/bin/$pandocToolName'; // pandocToolName is 'pandoc'
 
       if (await File(executablePath).exists()) {
         print("PandocInstaller (AppImage): Found at $executablePath. Using direct path.");
         return executablePath;
       } else {
-        print("PandocInstaller (AppImage): ERROR - Not found at expected AppImage path $executablePath. Falling back to PATH for AppImage context.");
-        return pandocToolName; // Fallback to PATH
+        print("PandocInstaller (AppImage): ERROR - Not found at AppImage path $executablePath. Fallback.");
+        // Fall through to caching/extraction or PATH
       }
     }
 
-    // If not in AppImage or AppImage specific path failed, proceed with caching/extraction logic
+    // --- Caching/Extraction Logic (for other platforms or as fallback) ---
     final prefs = await SharedPreferences.getInstance();
     String? storedPath = prefs.getString(_prefsKeyPandocPath);
     String? storedVersion = prefs.getString(_prefsKeyPandocVersion);
