@@ -6,8 +6,12 @@ import 'package:latex_editor/providers/project_provider.dart';
 import 'package:process_run/process_run.dart';
 import 'package:latex_editor/screens/pdf_view_screen.dart';
 import 'package:latex_editor/utils/tectonic_installer.dart';
-import 'package:latex_editor/utils/pandoc_installer.dart'; // Already added in previous step by logic, ensuring it's here.
-import 'package:share_plus/share_plus.dart'; // For sharing exported files
+import 'package:latex_editor/utils/pandoc_installer.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:code_text_field/code_text_field.dart';
+import 'package:flutter_highlight/themes/github.dart';
+import 'package:flutter_highlight/themes/atom-one-dark.dart'; // Using atom-one-dark for dark theme
+import 'package:flutter_highlight/languages/tex.dart';
 
 class EditorScreen extends ConsumerStatefulWidget {
   final String projectId;
@@ -19,7 +23,7 @@ class EditorScreen extends ConsumerStatefulWidget {
 }
 
 class _EditorScreenState extends ConsumerState<EditorScreen> {
-  late TextEditingController _texContentController;
+  CodeController? _texContentController; // Changed to CodeController (nullable for late init)
   bool _isLoading = true;
   Project? _currentProjectDetails;
   bool _isCompiling = false;
@@ -29,8 +33,15 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   @override
   void initState() {
     super.initState();
-    _texContentController = TextEditingController();
-    _loadProjectData();
+    // Initialize CodeController here or in _loadProjectData after content is fetched.
+    // For simplicity, initializing with language and theme here.
+    // Theme will be adjusted later to match Yaru.
+    // Actual theme selection will happen in build method or based on context.
+    // _texContentController = CodeController(
+    //   language: tex,
+    //   // theme: monokaiSublimeTheme, // Theme will be applied dynamically
+    // );
+    _loadProjectData(); // Controller will be fully initialized in _loadProjectData or build
   }
 
   Future<void> _loadProjectData() async {
@@ -43,12 +54,25 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     if (_currentProjectDetails != null) {
       final content = await ref.read(projectListProvider.notifier).getTexFileContent(_currentProjectDetails!);
       if (mounted) {
-        if (content != null) {
-          _texContentController.text = content;
-        } else {
-          _texContentController.text = '% Error: Could not load TeX file.\n';
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Error loading TeX file content.')),
+        final currentTheme = Theme.of(context).brightness == Brightness.dark ? atomOneDarkTheme : githubTheme;
+        _texContentController ??= CodeController(
+            language: tex,
+            theme: currentTheme, // Apply theme dynamically
+            text: content ?? '% Error: Could not load TeX file.\n');
+
+        if (content == null && _texContentController!.text.startsWith('% Error')) {
+             ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Error loading TeX file content.')),
+            );
+        } else if (_texContentController!.text != content) {
+            _texContentController!.text = content ?? '';
+        }
+
+      }
+    } else {
+       if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: Project with ID ${widget.projectId} not found.')),
           );
         }
       }
@@ -83,7 +107,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
 
   @override
   void dispose() {
-    _texContentController.dispose();
+    _texContentController?.dispose();
     super.dispose();
   }
 
@@ -97,7 +121,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
 
     final success = await ref.read(projectListProvider.notifier).saveTexFileContent(
           _currentProjectDetails!,
-          _texContentController.text,
+          _texContentController?.text ?? '', // Use text from controller
         );
 
     if (mounted) {
@@ -301,19 +325,25 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       ),
       body: Padding(
         padding: const EdgeInsets.all(8.0),
-        child: TextField(
-          controller: _texContentController,
-          readOnly: _isCompiling,
-          expands: true,
-          maxLines: null,
-          minLines: null,
-          style: const TextStyle(fontFamily: 'monospace'),
-          decoration: const InputDecoration(
-            border: OutlineInputBorder(),
-            hintText: 'Enter your LaTeX code here...',
-          ),
-          keyboardType: TextInputType.multiline,
-        ),
+        child: _texContentController == null
+            ? const Center(child: CircularProgressIndicator()) // Show loading if controller is not ready
+            : CodeTheme(
+                data: CodeThemeData(
+                  styles: Theme.of(context).brightness == Brightness.dark
+                          ? atomOneDarkTheme
+                          : githubTheme
+                ),
+                child: CodeField(
+                  controller: _texContentController!,
+                  readOnly: _isCompiling,
+                  expands: true,
+                  maxLines: null, // Ensure it expands
+                  minLines: null, // Ensure it expands
+                  lineNumberStyle: const LineNumberStyle(width: 40), // Optional: show line numbers
+                  textStyle: const TextStyle(fontFamily: 'monospace'), // Base text style
+                  // background: monokaiSublimeTheme['root']?.backgroundColor, // Set background from theme
+                ),
+              ),
       ),
       bottomNavigationBar: BottomAppBar(
         child: Row(

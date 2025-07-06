@@ -37,6 +37,12 @@ dependencies:
   cupertino_icons: ^1.0.2
   yaru: ^0.5.1 # Check for latest version of Yaru theme
 
+  # Syntax Highlighting
+  code_text_field: ^1.1.0 # Check for latest version
+  flutter_highlight: ^0.7.0 # Check for latest version (dependency of code_text_field)
+  highlight: ^0.7.0 # Check for latest version (dependency of flutter_highlight)
+
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
