@@ -1,52 +1,66 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_pdfview/flutter_pdfview.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:latex_editor/providers/pdf_provider.dart'; // Import provider
 
-class PdfViewScreen extends StatefulWidget {
-  final String filePath;
-
-  const PdfViewScreen({super.key, required this.filePath});
+class PdfViewScreen extends ConsumerStatefulWidget { // Changed to ConsumerStatefulWidget
+  // No longer needs filePath directly, will get from provider
+  const PdfViewScreen({super.key});
 
   @override
-  State<PdfViewScreen> createState() => _PdfViewScreenState();
+  ConsumerState<PdfViewScreen> createState() => _PdfViewScreenState(); // Changed state type
 }
 
-class _PdfViewScreenState extends State<PdfViewScreen> {
+class _PdfViewScreenState extends ConsumerState<PdfViewScreen> { // Changed to ConsumerState
   int _totalPages = 0;
   int _currentPage = 0;
   bool pdfReady = false;
   PDFViewController? _pdfViewController;
   String? _errorMessage;
-
-  @override
-  void initState() {
-    super.initState();
-    File(widget.filePath).exists().then((exists) {
-      if (!exists) {
-        setState(() {
-          _errorMessage = "PDF file not found at path: ${widget.filePath}";
-        });
-      }
-    }).catchError((e) {
-       setState(() {
-          _errorMessage = "Error checking PDF file existence: $e";
-        });
-    });
-  }
+  // No filePath in constructor, it will come from provider.
 
   @override
   Widget build(BuildContext context) {
-    if (_errorMessage != null) {
+    final String? pdfPath = ref.watch(activeProjectPdfPathProvider);
+    final Key? pdfKey = ref.watch(pdfGenerationKeyProvider); // Watch the key
+
+    if (pdfPath == null) {
       return Scaffold(
-        appBar: AppBar(
-          title: const Text("PDF Viewer Error"),
-        ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Text("Error: $_errorMessage", style: const TextStyle(color: Colors.red)),
-          ),
-        ),
+        appBar: AppBar(title: const Text("PDF Preview")),
+        body: const Center(child: Text("No PDF has been compiled for the current project, or it's not available.")),
+      );
+    }
+
+    // It's good practice to check file existence before passing to PDFView,
+    // though PDFView itself has error handling.
+    // This provides a clearer message if the file pointed to by the provider is missing.
+    final pdfFile = File(pdfPath);
+    if (!pdfFile.existsSync()) {
+        return Scaffold(
+            appBar: AppBar(title: const Text("PDF Preview Error")),
+            body: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  "Error: PDF file not found at path:\n$pdfPath\n\nPlease recompile or ensure the file exists.",
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+        );
+    }
+
+    // If we reach here, path is not null and file exists.
+    // Specific PDFView errors will be handled by its onError callback.
+    // If _errorMessage is already set (e.g. by a PDFView callback from a previous build), show it.
+    if (_errorMessage != null) {
+       return Scaffold(
+        appBar: AppBar(title: const Text("PDF Preview Error")),
+        body: Center(child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+        )),
       );
     }
 
@@ -91,38 +105,47 @@ class _PdfViewScreenState extends State<PdfViewScreen> {
       body: Stack(
         children: <Widget>[
           PDFView(
-            filePath: widget.filePath,
+            key: pdfKey, // Use the generation key here to force rebuild on new PDF
+            filePath: pdfPath, // Use path from provider
             enableSwipe: true,
             swipeHorizontal: false,
             autoSpacing: false,
             pageFling: true,
             pageSnap: true,
-            defaultPage: _currentPage,
+            defaultPage: 0, // Reset to first page on new PDF
             fitPolicy: FitPolicy.BOTH,
-            preventLinkNavigation: false, // if you want to disable navigation on link tap
+            preventLinkNavigation: false,
             onRender: (pages) {
               if (mounted) {
+                // Check if the key has changed; if so, reset page counts
+                // This logic is a bit tricky with onRender. A simpler way is to reset
+                // _currentPage and _totalPages when pdfKey changes if detected earlier.
+                // For now, let's assume onRender is for the current PDF load.
                 setState(() {
                   _totalPages = pages ?? 0;
+                  _currentPage = 0; // Always reset to 0 for a new render with a new key
                   pdfReady = true;
+                  _errorMessage = null; // Clear previous PDFView specific errors
                 });
               }
             },
             onError: (error) {
               if (mounted) {
                 setState(() {
-                  _errorMessage = error.toString();
+                  _errorMessage = "PDF Rendering Error: ${error.toString()}";
+                  pdfReady = false; // PDF is not ready/failed to load
                 });
               }
-              print(error.toString());
+              print("PDFView Error: ${error.toString()}");
             },
             onPageError: (page, error) {
                if (mounted) {
                 setState(() {
-                   _errorMessage = 'Error on page $page: ${error.toString()}';
+                   _errorMessage = 'PDF Page Error on $page: ${error.toString()}';
+                   pdfReady = false;
                 });
               }
-              print('$page: ${error.toString()}');
+              print('PDFView Page $page Error: ${error.toString()}');
             },
             onViewCreated: (PDFViewController pdfViewController) {
               _pdfViewController = pdfViewController;
@@ -136,7 +159,7 @@ class _PdfViewScreenState extends State<PdfViewScreen> {
               }
             },
           ),
-          if (!pdfReady && _errorMessage == null)
+          if (!pdfReady && _errorMessage == null) // Show loading only if no error and not ready
             const Center(
               child: CircularProgressIndicator(),
             ),

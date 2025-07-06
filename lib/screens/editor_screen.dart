@@ -6,12 +6,16 @@ import 'package:latex_editor/providers/project_provider.dart';
 import 'package:process_run/process_run.dart';
 import 'package:latex_editor/screens/pdf_view_screen.dart';
 import 'package:latex_editor/utils/tectonic_installer.dart';
+import 'dart:async'; // For Timer (debouncer)
 import 'package:latex_editor/utils/pandoc_installer.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:code_text_field/code_text_field.dart';
 import 'package:flutter_highlight/themes/github.dart';
-import 'package:flutter_highlight/themes/atom-one-dark.dart'; // Using atom-one-dark for dark theme
+import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/languages/tex.dart';
+import 'package:latex_editor/providers/pdf_provider.dart';
+
+enum MessageType { info, success, error, warning }
 
 class EditorScreen extends ConsumerStatefulWidget {
   final String projectId;
@@ -30,23 +34,95 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   String _compilationLogs = '';
   bool _pdfGeneratedSuccessfully = false;
 
+  Timer? _debounceTimer;
+  final Duration _debounceDuration = const Duration(seconds: 2);
+
+  String _statusBarMessage = "Initializing..."; // Initial before initState
+  MessageType _statusBarMessageType = MessageType.info;
+  bool _isAutoCompiling = false;
+
   @override
   void initState() {
     super.initState();
-    // Initialize CodeController here or in _loadProjectData after content is fetched.
-    // For simplicity, initializing with language and theme here.
-    // Theme will be adjusted later to match Yaru.
-    // Actual theme selection will happen in build method or based on context.
-    // _texContentController = CodeController(
-    //   language: tex,
-    //   // theme: monokaiSublimeTheme, // Theme will be applied dynamically
-    // );
-    _loadProjectData(); // Controller will be fully initialized in _loadProjectData or build
+    _statusBarMessage = "Loading..."; // Set in initState
+    _loadProjectData().then((_) {
+      if (mounted) {
+        setState(() {
+          // Set to Ready only if no other status was set during load (e.g. error)
+          if (_statusBarMessage == "Loading..." || _statusBarMessage == "Initializing...") {
+            _statusBarMessage = "Ready";
+            _statusBarMessageType = MessageType.info;
+          }
+        });
+      }
+      if (_texContentController != null) {
+        _texContentController!.addListener(_onTextChanged);
+      }
+    });
+  }
+
+  void _onTextChanged() {
+    if (!mounted) return;
+    setState(() {
+      _statusBarMessage = "Editing...";
+      _statusBarMessageType = MessageType.info;
+    });
+    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
+    _debounceTimer = Timer(_debounceDuration, () {
+      if (mounted) {
+        // print("Debounce tick: Auto-compilation to be triggered for project: ${_currentProjectDetails?.name}");
+        if (!_isCompiling && !_isAutoCompiling) { // Don't trigger if any compile is running
+          _triggerAutoCompilation();
+        } else {
+          setState(() {
+             _statusBarMessage = "Ready (compilation pending)"; // Or some other status
+             _statusBarMessageType = MessageType.info;
+          });
+        }
+      }
+    });
+  }
+
+  Future<void> _triggerAutoCompilation() async {
+    if (_isCompiling || _isAutoCompiling) {
+      print("Auto-compilation skipped: A compilation is already in progress.");
+      // Optionally update status bar: e.g., "Auto-compile deferred: busy"
+      return;
+    }
+    if (_currentProjectDetails == null) {
+      print("Auto-compilation skipped: No project loaded.");
+      return;
+    }
+
+    // print("Triggering auto-compilation for ${ _currentProjectDetails!.name}");
+    if (!mounted) return;
+    setState(() {
+      _isAutoCompiling = true;
+      _statusBarMessage = "Auto-compiling...";
+      _statusBarMessageType = MessageType.info;
+    });
+
+    await _compileProject(isAutoCompile: true);
+
+    if (mounted) {
+      setState(() {
+        _isAutoCompiling = false;
+        // _compileProject will set the final status message (success/error)
+        // If not, set a default "Ready" or "Last compiled..." status here.
+        if (!_isCompiling && _statusBarMessage == "Auto-compiling...") { // If compile didn't update status
+           _statusBarMessage = _pdfGeneratedSuccessfully ? "Preview up-to-date" : "Ready";
+           _statusBarMessageType = _pdfGeneratedSuccessfully ? MessageType.success : MessageType.info;
+        }
+      });
+    }
   }
 
   Future<void> _loadProjectData() async {
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
+      _statusBarMessage = "Loading project...";
+      _statusBarMessageType = MessageType.info;
     });
 
     _currentProjectDetails = ref.read(projectByIdProvider(widget.projectId));
@@ -88,6 +164,11 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       _checkInitialPdfAvailability();
       setState(() {
         _isLoading = false;
+        // If still "Loading project...", change to "Ready"
+        if (_statusBarMessage == "Loading project..." || _statusBarMessage == "Loading...") {
+            _statusBarMessage = "Ready";
+            _statusBarMessageType = MessageType.info;
+        }
       });
     }
   }
@@ -107,7 +188,9 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
 
   @override
   void dispose() {
+    _texContentController?.removeListener(_onTextChanged); // Remove listener
     _texContentController?.dispose();
+    _debounceTimer?.cancel(); // Cancel timer
     super.dispose();
   }
 
@@ -137,25 +220,40 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     }
   }
 
-  Future<void> _compileProject() async {
+  Future<void> _compileProject({bool isAutoCompile = false}) async {
     if (_currentProjectDetails == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cannot compile: Project details not loaded.')),
+      if (!isAutoCompile) { // Only show SnackBar for manual compiles
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot compile: Project details not loaded.')),
+        );
+      }
       );
       return;
     }
     if (_isCompiling) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Compilation already in progress.')),
-      );
+      if (!isAutoCompile) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Compilation already in progress.')),
+        );
+      }
       return;
     }
 
-    await _saveContent();
+    // For auto-compile, save silently. For manual, save can show usual feedback.
+    // _saveContent already shows a SnackBar, which is fine for manual.
+    // For auto-compile, we might want a truly silent save if _saveContent could be parameterized.
+    // For now, the SnackBar from _saveContent will still appear.
+    await _saveContent(); // Shows its own "Saved" SnackBar for manual, which might be okay.
 
+    if (!mounted) return;
     setState(() {
-      _isCompiling = true;
+      _isCompiling = true; // This is for manual compilation context mainly
       _compilationLogs = 'Starting compilation...\n';
+      if (!isAutoCompile) {
+        _statusBarMessage = "Compiling...";
+        _statusBarMessageType = MessageType.info;
+      }
+      // For auto-compile, _statusBarMessage is already "Auto-compiling..."
       _pdfGeneratedSuccessfully = false;
     });
 
@@ -180,63 +278,104 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
         if (result.exitCode == 0) {
           _compilationLogs += 'PDF generated successfully!\n';
           _pdfGeneratedSuccessfully = true;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Compilation successful!')),
-          );
+
+          // Update the PDF path provider
+          final pdfFileName = project.mainTexPath.replaceAll(RegExp(r'\.tex$'), '.pdf');
+          final pdfPath = '${project.projectDirPath}/$pdfFileName';
+          ref.read(activeProjectPdfPathProvider.notifier).state = pdfPath;
+          ref.read(pdfGenerationKeyProvider.notifier).state = UniqueKey(); // Force refresh
+
+          if (!isAutoCompile) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Compilation successful!')),
+            );
+          }
+          _statusBarMessage = "Preview up-to-date (${TimeOfDay.now().format(context)})";
+          _statusBarMessageType = MessageType.success;
         } else {
           _compilationLogs += 'Compilation failed with exit code: ${result.exitCode}\n';
           _pdfGeneratedSuccessfully = false;
-           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Compilation failed. Exit code: ${result.exitCode}')),
-          );
+          if (!isAutoCompile) {
+             ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Compilation failed. Exit code: ${result.exitCode}')),
+             );
+          }
+          _statusBarMessage = "Compilation failed (exit code: ${result.exitCode})";
+          _statusBarMessageType = MessageType.error;
         }
       });
     } on ProcessException catch (e) {
-      setState(() {
-        _compilationLogs += 'Error running Tectonic: $e\n';
-        _compilationLogs += 'Make sure Tectonic is installed and in your PATH.\n';
-         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Error: Tectonic command not found or failed to run.')),
-        );
-      });
+      if(mounted) {
+        setState(() {
+          _compilationLogs += 'Error running Tectonic: $e\n';
+          _compilationLogs += 'Make sure Tectonic is installed and in your PATH.\n';
+          _statusBarMessage = "Tectonic not found or error.";
+          _statusBarMessageType = MessageType.error;
+          if (!isAutoCompile) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Error: Tectonic command not found or failed to run.')),
+            );
+          }
+        });
+      }
        print('Tectonic execution error: $e');
     } catch (e) {
-      setState(() {
-        _compilationLogs += 'An unexpected error occurred during compilation: $e\n';
-      });
+      if(mounted) {
+        setState(() {
+          _compilationLogs += 'An unexpected error occurred during compilation: $e\n';
+          _statusBarMessage = "Compilation error.";
+          _statusBarMessageType = MessageType.error;
+        });
+      }
       print('Unexpected compilation error: $e');
     } finally {
-      setState(() {
-        _isCompiling = false;
+      if(mounted) {
+        setState(() {
+          _isCompiling = false; // This is for manual compilation context
+          // _isAutoCompiling is handled in _triggerAutoCompilation
+          if (_statusBarMessage.contains("Compiling...") || _statusBarMessage.contains("Auto-compiling...")) {
+             // If no specific success/error message was set by compile logic (e.g. due to early exit or unexpected flow)
+             _statusBarMessage = "Ready";
+             _statusBarMessageType = MessageType.info;
+          }
+        });
+      }
       });
     }
-    _showCompilationLogs();
+    // For auto-compile, only show logs if there was an error.
+    // For manual compile, always show logs.
+    if (!isAutoCompile || result.exitCode != 0) {
+      _showCompilationLogs();
+    } else if (isAutoCompile && result.exitCode == 0) {
+      // Optionally, a very subtle feedback for successful auto-compile
+      // For now, the PDF refresh (next step) will be the main feedback.
+      print("Auto-compilation successful. PDF updated.");
+      // TODO: Update a status bar message (Step 4)
+    }
   }
 
   void _viewPdf() {
-    if (_currentProjectDetails == null) return;
-    final pdfFileName = _currentProjectDetails!.mainTexPath.replaceAll(RegExp(r'\.tex$'), '.pdf');
-    final pdfPath = '${_currentProjectDetails!.projectDirPath}/$pdfFileName';
-
-    final pdfFile = File(pdfPath);
-    pdfFile.exists().then((exists) {
-      if (exists) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => PdfViewScreen(filePath: pdfPath),
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('PDF not found. Please compile the project first.\nExpected at: $pdfPath')),
-        );
-      }
-    }).catchError((e) {
-       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error checking for PDF: $e')),
+    if (_currentProjectDetails == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+         const SnackBar(content: Text('Cannot view PDF: No project loaded.')),
       );
-    });
+      return;
+    }
+    if (!_pdfGeneratedSuccessfully) {
+       ScaffoldMessenger.of(context).showSnackBar(
+         const SnackBar(content: Text('Cannot view PDF: No successful compilation yet or PDF is missing.')),
+      );
+      return;
+    }
+
+    // The activeProjectPdfPathProvider should have been set by a successful compile.
+    // PdfViewScreen will pick it up.
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const PdfViewScreen(), // Constructor no longer needs filePath
+      ),
+    );
   }
 
   void _showCompilationLogs() {
@@ -305,8 +444,33 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text('Editing: ${projectForAppBar?.name ?? _currentProjectDetails!.name}'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(24.0), // Adjust height as needed
+          child: Container(
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+            color: _getStatusBackgroundColor(context, _statusBarMessageType),
+            child: Row(
+              children: [
+                if (_isAutoCompiling || (_isCompiling && _statusBarMessage.toLowerCase().contains("compiling")))
+                  const Padding(
+                    padding: EdgeInsets.only(right: 8.0),
+                    child: SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                  ),
+                Expanded(
+                  child: Text(
+                    _statusBarMessage,
+                    style: TextStyle(color: _getStatusForegroundColor(context, _statusBarMessageType)),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
         actions: [
-          if (_isCompiling)
+          // Keep manual compilation progress in actions for clarity, or remove if status bar is enough
+          if (_isCompiling && !_isAutoCompiling) // Show only for manual main compilation
             const Padding(
               padding: EdgeInsets.only(right: 8.0),
               child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
@@ -518,6 +682,41 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
          // Re-render the logs modal if it's still open or call _showCompilationLogs again
          // For simplicity, the modal will auto-update as _compilationLogs changes if it's open.
       }
+    }
+  }
+
+  Color _getStatusBackgroundColor(BuildContext context, MessageType type) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    switch (type) {
+      case MessageType.success:
+        return Colors.green.withOpacity(isDark ? 0.3 : 0.15);
+      case MessageType.error:
+        return Colors.red.withOpacity(isDark ? 0.3 : 0.15);
+      case MessageType.warning:
+        return Colors.orange.withOpacity(isDark ? 0.3 : 0.15);
+      case MessageType.info:
+      default:
+        // For Yaru theme, use a subtle AppBar related color or a neutral one
+        // return Theme.of(context).appBarTheme.backgroundColor?.withOpacity(0.5) ?? Theme.of(context).colorScheme.surface.withOpacity(0.1);
+        // A slightly more distinct but still subtle approach for info:
+        return Theme.of(context).colorScheme.onSurface.withOpacity(0.05);
+    }
+  }
+
+  Color _getStatusForegroundColor(BuildContext context, MessageType type) {
+    // Use default text colors which should contrast with the Yaru theme's background
+    // For specific error/success, could use themed colors, but often onSurface is fine
+    // if background provides enough indication.
+    switch (type) {
+      case MessageType.success:
+        return Colors.green.shade700; // Darker green for light theme, lighter for dark if needed
+      case MessageType.error:
+        return Colors.red.shade700;
+      case MessageType.warning:
+        return Colors.orange.shade700;
+      case MessageType.info:
+      default:
+        return Theme.of(context).colorScheme.onSurface.withOpacity(0.7);
     }
   }
 }
