@@ -25,12 +25,37 @@ const String currentBundledTectonicVersion = "0.15.0-bundle1"; // Example versio
 
 class TectonicInstaller {
   static Future<String?> getTectonicExecutablePath() async {
+    // --- macOS: Check for bundled tool within the .app bundle ---
+    if (Platform.isMacOS) {
+      try {
+        final mainAppExePath = Platform.resolvedExecutable; // e.g., YourApp.app/Contents/MacOS/YourAppName
+        final macOSDir = File(mainAppExePath).parent;     // YourApp.app/Contents/MacOS/
+        // Tools are expected to be alongside the main executable in Contents/MacOS/
+        final toolPath = '${macOSDir.path}/$tectonicToolName';
+
+        if (await File(toolPath).exists()) {
+          print("TectonicInstaller (macOS): Found bundled in .app at $toolPath. Using direct path.");
+          return toolPath;
+        } else {
+          // Alternative check: If tools are in Contents/Helpers/
+          final helpersPath = '${macOSDir.parent.path}/Helpers/$tectonicToolName';
+          if (await File(helpersPath).exists()) {
+            print("TectonicInstaller (macOS): Found bundled in .app/Contents/Helpers/ at $helpersPath. Using direct path.");
+            return helpersPath;
+          }
+          print("TectonicInstaller (macOS): Bundled tool not found in Contents/MacOS or Contents/Helpers. Will proceed to other methods.");
+        }
+      } catch (e) {
+        print("TectonicInstaller (macOS): Error checking for bundled tool: $e. Will proceed to other methods.");
+      }
+    }
+
     // --- Windows: Check for bundled tool relative to main executable ---
     if (Platform.isWindows) {
       try {
-        final mainAppExePath = Platform.resolvedExecutable; // Path to YourAppName.exe
-        final mainAppDir = File(mainAppExePath).parent;   // Directory containing YourAppName.exe
-        final toolPath = '${mainAppDir.path}\\tools\\$tectonicWindowsExe'; // Path to tools\tectonic.exe
+        final mainAppExePath = Platform.resolvedExecutable;
+        final mainAppDir = File(mainAppExePath).parent;
+        final toolPath = '${mainAppDir.path}\\tools\\$tectonicWindowsExe';
 
         if (await File(toolPath).exists()) {
           print("TectonicInstaller (Windows): Found bundled at $toolPath. Using direct path.");

@@ -16,6 +16,29 @@ const String currentBundledPandocVersion = "3.7.0.2-bundle1"; // Example version
 
 class PandocInstaller {
   static Future<String?> getPandocExecutablePath() async {
+    // --- macOS: Check for bundled tool within the .app bundle ---
+    if (Platform.isMacOS) {
+      try {
+        final mainAppExePath = Platform.resolvedExecutable;
+        final macOSDir = File(mainAppExePath).parent;
+        final toolPath = '${macOSDir.path}/$pandocToolName'; // Assumes pandocToolName is 'pandoc'
+
+        if (await File(toolPath).exists()) {
+          print("PandocInstaller (macOS): Found bundled in .app at $toolPath. Using direct path.");
+          return toolPath;
+        } else {
+          final helpersPath = '${macOSDir.parent.path}/Helpers/$pandocToolName';
+          if (await File(helpersPath).exists()) {
+            print("PandocInstaller (macOS): Found bundled in .app/Contents/Helpers/ at $helpersPath. Using direct path.");
+            return helpersPath;
+          }
+          print("PandocInstaller (macOS): Bundled tool not found in Contents/MacOS or Contents/Helpers. Will proceed to other methods.");
+        }
+      } catch (e) {
+        print("PandocInstaller (macOS): Error checking for bundled tool: $e. Will proceed to other methods.");
+      }
+    }
+
     // --- Windows: Check for bundled tool relative to main executable ---
     if (Platform.isWindows) {
       try {
