@@ -5,70 +5,140 @@ import 'package:path_provider/path_provider.dart';
 
 // Placeholder for actual Tectonic binary name for different architectures
 // e.g., Map<String, String> tectonicBinaries = { 'arm64': 'tectonic_arm64', ... }
-const String tectonicAssetName = 'tectonic_android_arm64'; // Example, would need actual binary
-const String tectonicExecutableName = 'tectonic_exec';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:shared_preferences/shared_preferences.dart';
+// Assuming NativeToolHelper will be created in lib/services/native_tool_helper.dart
+import 'package:latex_editor/services/native_tool_helper.dart';
+
+
+// Base name for the tool, platform-specific executables might have extensions
+const String tectonicToolName = 'tectonic';
+const String tectonicWindowsExe = 'tectonic.exe'; // Example for Windows
+
+// Keys for shared_preferences
+const String _prefsKeyTectonicPath = 'tectonic_executable_path_v2'; // Incremented version
+const String _prefsKeyTectonicVersion = 'tectonic_bundled_version_v2';
+
+// This version string should be updated if new binaries are bundled with the app.
+// It forces re-extraction and permission setting if the bundled version changes.
+const String currentBundledTectonicVersion = "0.15.0-bundle1"; // Example version
 
 class TectonicInstaller {
   static Future<String?> getTectonicExecutablePath() async {
-    // This is a placeholder for a complex process.
-    // In a real scenario, this would:
-    // 1. Determine device architecture.
-    // 2. Select the correct Tectonic binary from app assets.
-    // 3. Get the app's private data directory.
-    // 4. Copy the binary from assets to this directory if not already present or if version changed.
-    // 5. Attempt to make the binary executable (e.g., using a native plugin or specific Android APIs).
-    //    This is the trickiest part on non-rooted Android for files in app's own data dir.
-    //    Sometimes, just being in the app's data dir might be enough if called via Process.run
-    //    with the full path, but execute permissions are usually needed.
-    // 6. Return the full path to the executable binary.
+    final prefs = await SharedPreferences.getInstance();
+    String? storedPath = prefs.getString(_prefsKeyTectonicPath);
+    String? storedVersion = prefs.getString(_prefsKeyTectonicVersion);
 
-    Directory appSupportDir = await getApplicationSupportDirectory();
-    String tectonicDirPath = '${appSupportDir.path}/tectonic_bundle';
-    await Directory(tectonicDirPath).create(recursive: true); // Ensure directory exists
+    if (storedPath != null &&
+        storedVersion == currentBundledTectonicVersion &&
+        await File(storedPath).exists()) {
+      print("TectonicInstaller: Using cached executable at $storedPath (Version: $storedVersion)");
+      // TODO: Add a check here if it's actually executable, might require another platform channel call
+      // or trust that if it was set once, it remains. For critical ops, a check might be good.
+      return storedPath;
+    }
 
-    String executablePath = '$tectonicDirPath/$tectonicExecutableName';
-    File executableFile = File(executablePath);
+    print("TectonicInstaller: No valid cached executable or version mismatch. Attempting to install from assets.");
 
-    // --- Placeholder: Simulate checking if Tectonic is "available" ---
-    // For now, we'll assume if this function is called, we want to *try* to use it.
-    // In a real app, you might check if it's already been "installed" (copied & chmod-ed)
-    // For this stub, we are NOT actually copying or setting permissions.
-    // We are just returning a path where we *would* put it.
-    // The actual `process_run` will fail if 'tectonic' isn't in PATH and this path isn't populated.
+    if (kIsWeb) {
+      print("TectonicInstaller: Bundling not supported on web. Relying on PATH or server-side for Tectonic.");
+      return tectonicToolName; // Default to PATH lookup for web
+    }
 
-    // Simulate that if the file exists at the target path, it's usable.
-    // In reality, we'd need to copy it from assets and set permissions here.
-    // For this stub, if it doesn't exist, we'll just return the path anyway,
-    // and let the Process.run call fail if `tectonic` isn't globally available.
-    // This highlights where the actual bundling logic would go.
+    String platformDirName;
+    String archDirName;
+    String binaryFileName = tectonicToolName; // Default, override for Windows
 
-    // if (!await executableFile.exists()) {
-    //   print("Tectonic executable not found at $executablePath. Attempting to copy from assets (conceptual).");
-    //   try {
-    //     ByteData data = await rootBundle.load('assets/bin/$tectonicAssetName'); // Path in assets
-    //     List<int> bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-    //     await executableFile.writeAsBytes(bytes, flush: true);
-    //     print("Copied tectonic binary to $executablePath. Manual chmod +x might be required if not using system PATH.");
-    //     // Here you would attempt to set execute permissions, e.g., via a platform channel.
-    //     // For example: await NativeUtils.setExecutable(executablePath);
-    //   } catch (e) {
-    //     print("Error copying Tectonic from assets: $e. Will rely on system PATH or manual setup.");
-    //     return null; // Or return 'tectonic' to try PATH
-    //   }
-    // }
+    // Determine platform directory name
+    if (Platform.isAndroid) platformDirName = 'android';
+    else if (Platform.isIOS) platformDirName = 'ios';
+    else if (Platform.isLinux) platformDirName = 'linux';
+    else if (Platform.isMacOS) platformDirName = 'macos';
+    else if (Platform.isWindows) {
+      platformDirName = 'windows';
+      binaryFileName = tectonicWindowsExe;
+    } else {
+      print("TectonicInstaller: Unsupported platform: ${Platform.operatingSystem}. Falling back to PATH.");
+      return tectonicToolName;
+    }
 
-    // For the purpose of this stretch goal (stubbing), we will return the *intended* path.
-    // If a real binary is placed there AND made executable, Process.run could use it.
-    // If not, and 'tectonic' is in PATH, Process.run('tectonic'...) will use that.
-    // If neither, it will fail, which is the current behavior if not in PATH.
-    // This structure allows us to later implement the full bundling.
+    // Determine architecture directory name (simplified - needs robust detection or build-time configuration)
+    // This is a placeholder. Real implementation needs accurate architecture detection.
+    // For Android, ABI splits in build process are preferred over runtime detection here for asset path.
+    // For desktop, more specific detection or providing multiple and letting user choose/auto-detect might be needed.
+    if (Platform.isAndroid) {
+        // Example: assuming arm64-v8a. In reality, the app's specific ABI build would determine this.
+        // The asset path must match the ABI-specific assets included.
+        archDirName = 'arm64-v8a';
+    } else if (Platform.isIOS) {
+        archDirName = 'arm64'; // Device, simulator would be different
+    } else if (Platform.isLinux) {
+        // Could be 'x86_64' or 'aarch64'. Assuming x86_64 for now.
+        archDirName = 'x86_64';
+    } else if (Platform.isMacOS) {
+        // Could be 'x86_64' or 'arm64'. Assuming arm64 for modern Macs.
+        archDirName = 'arm64';
+    } else if (Platform.isWindows) {
+        archDirName = 'x86_64';
+    } else {
+        print("TectonicInstaller: Could not determine architecture for $platformDirName. Falling back to PATH.");
+        return tectonicToolName;
+    }
 
-    // For now, let's return 'tectonic' to signify using the PATH or whatever is globally available.
-    // This makes the current implementation continue to work as it did before this stub,
-    // but provides the structure for future enhancement.
-    // If we returned `executablePath` directly, it would likely fail unless the binary
-    // was manually placed and made executable there during development.
-    return 'tectonic'; // Default to PATH lookup for now.
-                      // Change to `executablePath` once bundling is fully working.
+    final String assetPath = 'assets/bin/$platformDirName/$archDirName/$binaryFileName';
+    print("TectonicInstaller: Target asset path: $assetPath");
+
+    try {
+      final ByteData byteData = await rootBundle.load(assetPath);
+      final Directory appSupportDir = await getApplicationSupportDirectory();
+      final Directory toolsDir = Directory('${appSupportDir.path}/bundled_tools/$tectonicToolName/$currentBundledTectonicVersion');
+
+      // Ensure the specific versioned directory exists and is clean if we are re-extracting
+      if (await toolsDir.exists() && storedVersion != currentBundledTectonicVersion) {
+          print("TectonicInstaller: Clearing old version directory: ${toolsDir.path}");
+          await toolsDir.delete(recursive: true);
+      }
+      await toolsDir.create(recursive: true);
+
+      final File executableFile = File('${toolsDir.path}/$binaryFileName');
+
+      await executableFile.writeAsBytes(byteData.buffer.asUint8List(), flush: true);
+      print("TectonicInstaller: Copied binary to ${executableFile.path}");
+
+      bool permissionsSet = false;
+      if (Platform.isAndroid || Platform.isIOS || Platform.isLinux || Platform.isMacOS) {
+        print("TectonicInstaller: Attempting to set execute permission via NativeToolHelper...");
+        permissionsSet = await NativeToolHelper.setExecutablePermission(executableFile.path);
+        if (permissionsSet) {
+          print("TectonicInstaller: Execute permission successfully set for ${executableFile.path}");
+        } else {
+          print("TectonicInstaller: Failed to set execute permission for ${executableFile.path} via platform channel.");
+        }
+      } else if (Platform.isWindows) {
+        // .exe files are generally executable by default on Windows.
+        permissionsSet = true;
+        print("TectonicInstaller: Assuming executable on Windows: ${executableFile.path}");
+      }
+
+      if (permissionsSet) {
+        await prefs.setString(_prefsKeyTectonicPath, executableFile.path);
+        await prefs.setString(_prefsKeyTectonicVersion, currentBundledTectonicVersion);
+        print("TectonicInstaller: Successfully prepared. Path cached: ${executableFile.path}");
+        return executableFile.path;
+      } else {
+        print("TectonicInstaller: Failed to ensure execute permissions. Falling back to PATH.");
+        // Optionally, delete the copied file if permissions couldn't be set and it's unusable
+        // await executableFile.delete();
+        return tectonicToolName;
+      }
+    } on FlutterException catch (e) {
+        // This catches errors like asset not found
+        print("TectonicInstaller: FlutterException (likely asset not found at $assetPath): $e. Falling back to PATH.");
+        return tectonicToolName;
+    }
+    catch (e) {
+      print("TectonicInstaller: Error during binary preparation ($assetPath): $e. Falling back to PATH.");
+      return tectonicToolName;
+    }
   }
 }
