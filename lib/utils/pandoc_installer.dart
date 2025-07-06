@@ -16,6 +16,23 @@ const String currentBundledPandocVersion = "3.7.0.2-bundle1"; // Example version
 
 class PandocInstaller {
   static Future<String?> getPandocExecutablePath() async {
+    // Check if running inside an AppImage first
+    if (Platform.isLinux && Platform.environment.containsKey('APPIMAGE') && Platform.environment.containsKey('APPDIR')) {
+      final appDir = Platform.environment['APPDIR'];
+      // Determine correct binary name for the platform (e.g. pandoc vs pandoc.exe)
+      final binaryName = Platform.isWindows ? pandocWindowsExe : pandocToolName;
+      final executablePath = '$appDir/usr/bin/$binaryName';
+
+      if (await File(executablePath).exists()) {
+        print("PandocInstaller (AppImage): Found at $executablePath. Using direct path.");
+        return executablePath;
+      } else {
+        print("PandocInstaller (AppImage): ERROR - Not found at expected AppImage path $executablePath. Falling back to PATH for AppImage context.");
+        return pandocToolName; // Fallback to PATH
+      }
+    }
+
+    // If not in AppImage or AppImage specific path failed, proceed with caching/extraction logic
     final prefs = await SharedPreferences.getInstance();
     String? storedPath = prefs.getString(_prefsKeyPandocPath);
     String? storedVersion = prefs.getString(_prefsKeyPandocVersion);
@@ -27,11 +44,11 @@ class PandocInstaller {
       return storedPath;
     }
 
-    print("PandocInstaller: No valid cached executable or version mismatch. Attempting to install from assets.");
+    print("PandocInstaller: No valid cached executable or version mismatch (or not AppImage). Attempting to install from assets.");
 
     if (kIsWeb) {
       print("PandocInstaller: Bundling not supported on web. Relying on PATH or server-side for Pandoc.");
-      return pandocToolName; // Default to PATH lookup for web
+      return pandocToolName;
     }
 
     String platformDirName;

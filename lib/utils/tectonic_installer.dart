@@ -25,6 +25,21 @@ const String currentBundledTectonicVersion = "0.15.0-bundle1"; // Example versio
 
 class TectonicInstaller {
   static Future<String?> getTectonicExecutablePath() async {
+    // Check if running inside an AppImage first
+    if (Platform.isLinux && Platform.environment.containsKey('APPIMAGE') && Platform.environment.containsKey('APPDIR')) {
+      final appDir = Platform.environment['APPDIR'];
+      final executablePath = '$appDir/usr/bin/$tectonicToolName'; // Assumes tectonicToolName is 'tectonic'
+
+      if (await File(executablePath).exists()) {
+        print("TectonicInstaller (AppImage): Found at $executablePath. Using direct path.");
+        return executablePath;
+      } else {
+        print("TectonicInstaller (AppImage): ERROR - Not found at expected AppImage path $executablePath. Falling back to PATH for AppImage context.");
+        return tectonicToolName; // Fallback to PATH even in AppImage if not found at expected bundled location
+      }
+    }
+
+    // If not in AppImage or AppImage specific path failed, proceed with caching/extraction logic
     final prefs = await SharedPreferences.getInstance();
     String? storedPath = prefs.getString(_prefsKeyTectonicPath);
     String? storedVersion = prefs.getString(_prefsKeyTectonicVersion);
@@ -33,16 +48,14 @@ class TectonicInstaller {
         storedVersion == currentBundledTectonicVersion &&
         await File(storedPath).exists()) {
       print("TectonicInstaller: Using cached executable at $storedPath (Version: $storedVersion)");
-      // TODO: Add a check here if it's actually executable, might require another platform channel call
-      // or trust that if it was set once, it remains. For critical ops, a check might be good.
       return storedPath;
     }
 
-    print("TectonicInstaller: No valid cached executable or version mismatch. Attempting to install from assets.");
+    print("TectonicInstaller: No valid cached executable or version mismatch (or not AppImage). Attempting to install from assets.");
 
     if (kIsWeb) {
       print("TectonicInstaller: Bundling not supported on web. Relying on PATH or server-side for Tectonic.");
-      return tectonicToolName; // Default to PATH lookup for web
+      return tectonicToolName;
     }
 
     String platformDirName;
